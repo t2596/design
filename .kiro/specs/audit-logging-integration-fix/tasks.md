@@ -1,0 +1,127 @@
+# Implementation Plan
+
+- [ ] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - Security Operations Complete Without Audit Logs
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: Scope the property to the six concrete failing operations (vehicle registration success/failure, encrypted/unencrypted data transfer, certificate issuance/revocation)
+  - Test that each of the six security-relevant operations completes successfully but does NOT create audit log entries
+  - For each operation: execute API call → verify operation succeeds → verify audit_logs table has NO new entries
+  - Test implementation details from Bug Condition in design: `isBugCondition(operation)` returns True when operation completes without calling audit logger
+  - The test assertions should match the Expected Behavior Properties from design: audit logs SHOULD be created but are NOT
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the bug exists)
+  - Document counterexamples found to understand root cause (e.g., "POST /api/auth/register succeeds but SELECT COUNT(*) FROM audit_logs WHERE event_type='AUTHENTICATION_SUCCESS' returns 0")
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
+
+- [ ] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Main Operation Behavior Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for all six operations
+  - Record actual responses (status codes, response bodies, database changes) for each operation
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements
+  - Test that responses are identical (same JSON structure, same field values)
+  - Test that database changes are identical (vehicle_data, certificates, Redis sessions)
+  - Test that error handling is identical (same HTTPException messages for invalid inputs)
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9_
+
+- [ ] 3. Fix for audit logging integration
+
+  - [ ] 3.1 Integrate audit logging into vehicle registration endpoint
+    - Add imports: `from src.audit_logger import AuditLogger`, `from src.db.postgres import PostgreSQLConnection`, `from config.database import PostgreSQLConfig`
+    - In `register_vehicle()` function in `src/api/routes/auth.py`:
+      - After successful registration (before returning VehicleRegisterResponse), wrap audit logging in try-except
+      - Create AuditLogger instance with PostgreSQL connection
+      - Call `audit_logger.log_auth_event(vehicle_id, EventType.AUTHENTICATION_SUCCESS, True, details=...)`
+      - Close audit database connection
+      - Catch exceptions and log error without failing main operation
+    - In exception handler, add audit logging for AUTHENTICATION_FAILURE
+    - _Bug_Condition: isBugCondition(operation) where operation.type='vehicle_register' AND operation.completed=True AND NOT auditLoggerCalled(operation)_
+    - _Expected_Behavior: audit_logger.log_auth_event() is called with correct EventType (AUTHENTICATION_SUCCESS or AUTHENTICATION_FAILURE) and creates audit_logs table entry_
+    - _Preservation: VehicleRegisterResponse structure unchanged, Redis session creation unchanged, error handling unchanged_
+    - _Requirements: 2.1, 2.2, 3.1, 3.7_
+
+  - [ ] 3.2 Integrate audit logging into encrypted data transfer endpoint
+    - In `receive_secure_vehicle_data()` function in `src/api/routes/auth.py`:
+      - After successfully saving data to vehicle_data table (before returning response), wrap audit logging in try-except
+      - Create AuditLogger instance with PostgreSQL connection
+      - Calculate data size: `len(secure_msg_dict['encrypted_payload']) // 2` (hex string to bytes)
+      - Call `audit_logger.log_data_transfer(vehicle_id, data_size, encrypted=True, details=...)`
+      - Close audit database connection
+      - Catch exceptions and log error without failing main operation
+    - _Bug_Condition: isBugCondition(operation) where operation.type='data_secure' AND operation.completed=True AND NOT auditLoggerCalled(operation)_
+    - _Expected_Behavior: audit_logger.log_data_transfer() is called with encrypted=True and creates audit_logs table entry with DATA_ENCRYPTED event_type_
+    - _Preservation: Response structure unchanged, vehicle_data table insertion unchanged, session heartbeat unchanged_
+    - _Requirements: 2.3, 3.1, 3.9_
+
+  - [ ] 3.3 Integrate audit logging into unencrypted data transfer endpoint
+    - In `receive_vehicle_data()` function in `src/api/routes/auth.py`:
+      - After successfully saving data to vehicle_data table (before returning response), wrap audit logging in try-except
+      - Create AuditLogger instance with PostgreSQL connection
+      - Calculate data size: `len(json.dumps(data).encode('utf-8'))`
+      - Call `audit_logger.log_data_transfer(vehicle_id, data_size, encrypted=False, details=...)`
+      - Close audit database connection
+      - Catch exceptions and log error without failing main operation
+    - _Bug_Condition: isBugCondition(operation) where operation.type='data_plain' AND operation.completed=True AND NOT auditLoggerCalled(operation)_
+    - _Expected_Behavior: audit_logger.log_data_transfer() is called with encrypted=False and creates audit_logs table entry with DATA_DECRYPTED event_type_
+    - _Preservation: Response structure unchanged, vehicle_data table insertion unchanged, session heartbeat unchanged_
+    - _Requirements: 2.4, 3.1, 3.9_
+
+  - [ ] 3.4 Integrate audit logging into certificate issuance endpoint
+    - Add imports to `src/api/routes/certificates.py`: `from src.audit_logger import AuditLogger`, `from src.db.postgres import PostgreSQLConnection`
+    - In `issue_new_certificate()` function:
+      - After successfully issuing certificate (before returning IssueCertificateResponse), wrap audit logging in try-except
+      - Create AuditLogger instance with PostgreSQL connection (reuse existing db_conn or create new one)
+      - Call `audit_logger.log_certificate_operation(operation="issued", cert_id=certificate.serial_number, vehicle_id=request.vehicle_id, details=...)`
+      - Close audit database connection
+      - Catch exceptions and log error without failing main operation
+    - _Bug_Condition: isBugCondition(operation) where operation.type='cert_issue' AND operation.completed=True AND NOT auditLoggerCalled(operation)_
+    - _Expected_Behavior: audit_logger.log_certificate_operation() is called with operation="issued" and creates audit_logs table entry with CERTIFICATE_ISSUED event_type_
+    - _Preservation: IssueCertificateResponse structure unchanged, certificates table insertion unchanged, error handling unchanged_
+    - _Requirements: 2.5, 3.1, 3.8_
+
+  - [ ] 3.5 Integrate audit logging into certificate revocation endpoint
+    - In `revoke_existing_certificate()` function in `src/api/routes/certificates.py`:
+      - After successfully revoking certificate (before returning RevokeCertificateResponse), wrap audit logging in try-except
+      - Create AuditLogger instance with PostgreSQL connection (reuse existing db_conn or create new one)
+      - Call `audit_logger.log_certificate_operation(operation="revoked", cert_id=request.serial_number, details=...)`
+      - Close audit database connection
+      - Catch exceptions and log error without failing main operation
+    - _Bug_Condition: isBugCondition(operation) where operation.type='cert_revoke' AND operation.completed=True AND NOT auditLoggerCalled(operation)_
+    - _Expected_Behavior: audit_logger.log_certificate_operation() is called with operation="revoked" and creates audit_logs table entry with CERTIFICATE_REVOKED event_type_
+    - _Preservation: RevokeCertificateResponse structure unchanged, CRL table update unchanged, error handling unchanged_
+    - _Requirements: 2.6, 3.1, 3.8_
+
+  - [ ] 3.6 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Security Operations Create Audit Logs
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - Verify all six operations now create audit log entries with correct event_type, vehicle_id, operation_result, and details
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6_
+
+  - [ ] 3.7 Verify preservation tests still pass
+    - **Property 2: Preservation** - Main Operation Behavior Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all tests still pass after fix (no regressions)
+    - Verify responses are identical to unfixed version (ignoring audit_logs table)
+    - Verify database changes are identical (vehicle_data, certificates, Redis)
+    - Verify error handling is identical (same HTTPException messages)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9_
+
+- [ ] 4. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise
+  - Verify audit_logs table contains entries for all six operation types
+  - Verify Web UI audit log query page displays the new logs
+  - Verify audit report export includes the new logs

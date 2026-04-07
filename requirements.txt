@@ -1,0 +1,24 @@
+# 车联网安全通信网关系统 - Python 依赖
+
+# 国密算法库
+gmssl==3.2.2
+
+# 数据库驱动
+psycopg2-binary==2.9.9
+redis==5.0.1
+
+# Web 框架
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+
+# 测试框架
+pytest==7.4.4
+pytest-asyncio==0.23.3
+hypothesis==6.98.3
+httpx==0.27.0
+
+# 工具库
+python-dotenv==1.0.0
+cryptography==42.0.0
+requests==2.31.0
