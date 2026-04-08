@@ -1,0 +1,131 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: vehicle-iot-gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+      - name: gateway
+        image: vehicle-iot-gateway:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: POSTGRES_HOST
+        - name: POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: POSTGRES_PORT
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: gateway-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: gateway-secrets
+              key: POSTGRES_PASSWORD
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: gateway-secrets
+              key: REDIS_PASSWORD
+        - name: SESSION_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: SESSION_TIMEOUT
+        - name: TIMESTAMP_TOLERANCE
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: TIMESTAMP_TOLERANCE
+        - name: CACHE_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: CACHE_SIZE
+        - name: CACHE_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: gateway-config
+              key: CACHE_TTL
+        - name: CA_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gateway-secrets
+              key: CA_PRIVATE_KEY
+        - name: CA_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gateway-secrets
+              key: CA_PUBLIC_KEY
+        - name: API_TOKEN
+          value: "dev-token-12345"
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-service
+  namespace: vehicle-iot-gateway
+spec:
+  selector:
+    app: gateway
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: LoadBalancer

@@ -1,0 +1,122 @@
+version: '3.8'
+
+# 车辆客户端 Docker Compose 配置
+# 
+# 此配置包含完整的系统栈（网关 + 数据库 + Redis + 客户端）
+# 用于独立测试和演示
+#
+# 注意：客户端只与网关通信，不直接访问数据库或 Redis
+
+services:
+  # 车辆客户端 1
+  vehicle-client-1:
+    build:
+      context: ..
+      dockerfile: client/Dockerfile
+    container_name: vehicle-client-1
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=8000
+    command: ["--vehicle-id", "VIN000001", "--mode", "continuous", "--interval", "10"]
+    networks:
+      - vehicle-iot-network
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # 车辆客户端 2
+  vehicle-client-2:
+    build:
+      context: ..
+      dockerfile: client/Dockerfile
+    container_name: vehicle-client-2
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=8000
+    command: ["--vehicle-id", "VIN000002", "--mode", "continuous", "--interval", "15"]
+    networks:
+      - vehicle-iot-network
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # 车辆客户端 3
+  vehicle-client-3:
+    build:
+      context: ..
+      dockerfile: client/Dockerfile
+    container_name: vehicle-client-3
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=8000
+    command: ["--vehicle-id", "VIN000003", "--mode", "continuous", "--interval", "20"]
+    networks:
+      - vehicle-iot-network
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # 网关服务（引用主 docker-compose.yml）
+  gateway:
+    image: vehicle-iot-gateway:latest
+    container_name: gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=vehicle_iot_gateway
+      - POSTGRES_USER=gateway_user
+      - POSTGRES_PASSWORD=gateway_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    networks:
+      - vehicle-iot-network
+    depends_on:
+      - postgres
+      - redis
+
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:14-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=vehicle_iot_gateway
+      - POSTGRES_USER=gateway_user
+      - POSTGRES_PASSWORD=gateway_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ../db/init_data.sql:/docker-entrypoint-initdb.d/02-init_data.sql
+    networks:
+      - vehicle-iot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - redis-data:/data
+      - ../db/redis_config.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - vehicle-iot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  vehicle-iot-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:

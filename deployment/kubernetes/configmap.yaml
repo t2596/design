@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: vehicle-iot-gateway
+data:
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "vehicle_iot_gateway"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  SESSION_TIMEOUT: "3600"
+  TIMESTAMP_TOLERANCE: "300"
+  CACHE_SIZE: "10000"
+  CACHE_TTL: "300"
+  API_PORT: "8000"
