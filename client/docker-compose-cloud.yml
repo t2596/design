@@ -1,0 +1,32 @@
+version: '3.8'
+
+# 车辆客户端 Docker Compose 配置（连接云端Gateway）
+# 
+# 此配置只包含客户端，连接到云上的Gateway
+# 适用于测试和演示场景
+#
+# 使用方法：
+#   docker-compose -f docker-compose-cloud.yml up -d
+#   docker-compose -f docker-compose-cloud.yml scale vehicle-client=10  # 启动10个客户端
+
+services:
+  # 车辆客户端（可扩展）
+  vehicle-client:
+    image: vehicle-client:latest
+    build:
+      context: ..
+      dockerfile: client/Dockerfile
+    environment:
+      # 云端Gateway地址
+      - GATEWAY_HOST=8.160.179.59
+      - GATEWAY_PORT=32677
+      # 车辆ID前缀（会自动添加容器编号）
+      - VEHICLE_ID_PREFIX=CLOUD-VIN
+      # 运行模式：continuous（持续发送）或 once（发送一次）
+      - MODE=continuous
+      # 发送间隔（秒）
+      - INTERVAL=10
+    restart: unless-stopped
+    # 使用主机网络模式，避免网络问题
+    network_mode: host
+
