@@ -110,10 +110,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=web
 
       # ---------- client 车辆客户端镜像 ----------
+      # 注意：client/Dockerfile 需要从项目根目录构建（依赖 src/ 和 config/）
       - name: 构建并推送 client 镜像
         uses: docker/build-push-action@v5
         with:
-          context: ./client
+          context: .
           file: ./client/Dockerfile
           push: true
           tags: |
