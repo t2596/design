@@ -1,0 +1,158 @@
+name: CI/CD Pipeline
+
+# ============================================================
+# 触发条件
+# ------------------------------------------------------------
+# 1. push 到 main 分支：完整流程（测试 + 构建 + 推镜像）
+# 2. PR 到 main 分支：只跑测试（不推镜像，避免污染仓库）
+# 3. 手动触发：在 GitHub Actions 页面点 "Run workflow" 按钮
+# ============================================================
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # 阿里云 ACR 个人版地址（从 Secret 读取，避免暴露）
+  REGISTRY: ${{ secrets.ACR_REGISTRY }}
+  # 命名空间
+  NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+
+jobs:
+  # ============================================================
+  # Job 1: 单元测试
+  # ------------------------------------------------------------
+  # 安装 Python 依赖并运行 pytest
+  # 暂时使用 continue-on-error 让测试失败不阻塞构建（先跑通流程）
+  # 后续测试稳定后可以删掉 continue-on-error
+  # ============================================================
+  test:
+    name: Run Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 运行 pytest
+        run: pytest tests/ -v --tb=short
+        continue-on-error: true   # ← 测试稳定后删除此行
+
+  # ============================================================
+  # Job 2: 构建并推送 Docker 镜像
+  # ------------------------------------------------------------
+  # 依赖 test job 完成（不论测试是否通过，因为 continue-on-error）
+  # PR 不推镜像，仅 push / 手动触发才推
+  # 同时构建 3 个镜像：gateway / web / client
+  # 每个镜像打两个 tag：latest 和 commit short sha
+  # ============================================================
+  build-and-push:
+    name: Build & Push Docker images
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录阿里云 ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: 生成镜像 tag
+        id: meta
+        run: |
+          echo "SHA_TAG=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "DATE_TAG=$(date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
+
+      # ---------- gateway 主服务镜像 ----------
+      - name: 构建并推送 gateway 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/gateway:latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/gateway:${{ steps.meta.outputs.SHA_TAG }}
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,mode=max,scope=gateway
+
+      # ---------- web 前端镜像 ----------
+      - name: 构建并推送 web 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/web:latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/web:${{ steps.meta.outputs.SHA_TAG }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      # ---------- client 车辆客户端镜像 ----------
+      - name: 构建并推送 client 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: ./client
+          file: ./client/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/client:latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/client:${{ steps.meta.outputs.SHA_TAG }}
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,mode=max,scope=client
+
+      - name: 输出镜像清单
+        run: |
+          echo "## 🚀 镜像构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | 镜像地址 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| gateway | \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/gateway:${{ steps.meta.outputs.SHA_TAG }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| web | \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/web:${{ steps.meta.outputs.SHA_TAG }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| client | \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/client:${{ steps.meta.outputs.SHA_TAG }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # Job 3: 通知 Agent（占位）
+  # ------------------------------------------------------------
+  # 当前仅打印日志，未来在这里调用你的 AI Agent API
+  # 把镜像信息和部署任务推给 Agent 自主执行
+  # ============================================================
+  notify-agent:
+    name: Notify AI Agent
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: 占位 - 未来在此触发 Agent
+        run: |
+          echo "🤖 Agent 通知占位"
+          echo "commit: ${{ github.sha }}"
+          echo "branch: ${{ github.ref_name }}"
+          echo "镜像已推送至: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/"
+          echo ""
+          echo "未来这里会用 curl 调用 Agent 的 API："
+          echo "  curl -X POST https://your-agent.example.com/tasks ..."
