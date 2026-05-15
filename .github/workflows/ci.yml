@@ -198,8 +198,11 @@ jobs:
           )
 
           # 用 jq 构造合法 JSON（避免多行文本转义问题）
+          # name：会话标识，便于在 Agent 端追溯
+          # channel + to：告诉 Agent 部署完成后从哪里、发给谁 → 推送到微信
           PAYLOAD=$(jq -n \
             --arg msg "$MESSAGE" \
+            --arg name "auto-deploy-$SHA_TAG" \
             --arg sha "${{ github.sha }}" \
             --arg short_sha "$SHA_TAG" \
             --arg branch "${{ github.ref_name }}" \
@@ -207,9 +210,13 @@ jobs:
             --arg gateway_image "$REGISTRY/$NAMESPACE/gateway:$SHA_TAG" \
             --arg web_image "$REGISTRY/$NAMESPACE/web:$SHA_TAG" \
             --arg client_image "$REGISTRY/$NAMESPACE/client:$SHA_TAG" \
+            --arg notify_to "${{ secrets.OPENCLAW_NOTIFY_TO }}" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             '{
               message: $msg,
+              name: $name,
+              channel: "openclaw-weixin",
+              to: $notify_to,
               context: {
                 commit_sha: $sha,
                 commit_short: $short_sha,
