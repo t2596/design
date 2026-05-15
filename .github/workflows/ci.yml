@@ -169,29 +169,61 @@ jobs:
           echo "目标 Webhook: $AGENT_URL"
           echo "镜像 tag: $SHA_TAG"
 
-          # 构造任务 payload（结构化 + 自然语言双轨）
-          PAYLOAD=$(cat <<EOF
-          {
-            "intent": "deploy_new_version",
-            "natural_language": "新版本镜像已构建完成，请按标准流程部署到 K8s 集群，部署前确保 ECS 已开机，部署后跑健康检查，失败自动回滚。",
-            "context": {
-              "commit_sha": "${{ github.sha }}",
-              "commit_short": "$SHA_TAG",
-              "commit_message": $(echo "$COMMIT_MSG" | head -1 | jq -Rs .),
-              "branch": "${{ github.ref_name }}",
-              "author": "${{ github.actor }}",
-              "repository": "${{ github.repository }}",
-              "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "images": {
-                "gateway": "$REGISTRY/$NAMESPACE/gateway:$SHA_TAG",
-                "web": "$REGISTRY/$NAMESPACE/web:$SHA_TAG",
-                "client": "$REGISTRY/$NAMESPACE/client:$SHA_TAG"
-              },
-              "k8s_manifests_path": "deployment/kubernetes/"
-            }
-          }
-          EOF
+          # 构造任务 payload
+          # Agent webhook 期望的主字段是 message（收到后交给 LLM 理解）
+          # 额外带上结构化信息供 Agent skill 提取字段使用
+          MESSAGE=$(cat <<MSG
+          🚀 【部署任务】新版本镜像已构建完成，请执行部署。
+
+          【镜像】
+          - gateway: $REGISTRY/$NAMESPACE/gateway:$SHA_TAG
+          - web:     $REGISTRY/$NAMESPACE/web:$SHA_TAG
+          - client:  $REGISTRY/$NAMESPACE/client:$SHA_TAG
+
+          【提交信息】
+          - commit: ${{ github.sha }}
+          - branch: ${{ github.ref_name }}
+          - author: ${{ github.actor }}
+          - message: $(echo "$COMMIT_MSG" | head -1)
+
+          【执行要求】
+          1. 确保阿里云 ECS 已开机
+          2. 从 ACR 拉取上述镜像
+          3. 用 deployment/kubernetes/ 下的 YAML 部署到 K8s
+          4. 跑健康检查，失败自动回滚
+          5. 完成后告知结果
+
+          【Workflow】${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MSG
           )
+
+          # 用 jq 构造合法 JSON（避免多行文本转义问题）
+          PAYLOAD=$(jq -n \
+            --arg msg "$MESSAGE" \
+            --arg sha "${{ github.sha }}" \
+            --arg short_sha "$SHA_TAG" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg author "${{ github.actor }}" \
+            --arg gateway_image "$REGISTRY/$NAMESPACE/gateway:$SHA_TAG" \
+            --arg web_image "$REGISTRY/$NAMESPACE/web:$SHA_TAG" \
+            --arg client_image "$REGISTRY/$NAMESPACE/client:$SHA_TAG" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{
+              message: $msg,
+              context: {
+                commit_sha: $sha,
+                commit_short: $short_sha,
+                branch: $branch,
+                author: $author,
+                images: {
+                  gateway: $gateway_image,
+                  web: $web_image,
+                  client: $client_image
+                },
+                workflow_run: $run_url,
+                k8s_manifests_path: "deployment/kubernetes/"
+              }
+            }')
 
           # 调用 Agent webhook（HTTP，无需 -k）
           # --fail 让 HTTP 4xx/5xx 时 curl 退出码非 0，触发 step 失败
