@@ -137,23 +137,87 @@ jobs:
           echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================
-  # Job 3: 通知 Agent（占位）
+  # Job 3: 通知 OpenClaw Agent
   # ------------------------------------------------------------
-  # 当前仅打印日志，未来在这里调用你的 AI Agent API
-  # 把镜像信息和部署任务推给 Agent 自主执行
+  # 调用 Agent webhook，把镜像信息和部署任务推送给 Agent 自主执行
+  # 鉴权方式：Authorization: Bearer <OPENCLAW_HOOK_TOKEN>
   # ============================================================
   notify-agent:
-    name: Notify AI Agent
+    name: Notify OpenClaw Agent
     needs: build-and-push
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     steps:
-      - name: 占位 - 未来在此触发 Agent
+      - name: 检出代码（用于读取 commit 信息）
+        uses: actions/checkout@v4
+
+      - name: 准备镜像 tag
+        id: meta
+        run: echo "SHA_TAG=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: 推送部署任务给 OpenClaw Agent
+        env:
+          AGENT_URL: ${{ secrets.AGENT_WEBHOOK_URL }}
+          AGENT_TOKEN: ${{ secrets.OPENCLAW_HOOK_TOKEN }}
+          REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          SHA_TAG: ${{ steps.meta.outputs.SHA_TAG }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          echo "🤖 Agent 通知占位"
-          echo "commit: ${{ github.sha }}"
-          echo "branch: ${{ github.ref_name }}"
-          echo "镜像已推送至: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/"
+          set -e
+          echo "🤖 通知 Agent 部署新版本镜像..."
+          echo "目标 Webhook: $AGENT_URL"
+          echo "镜像 tag: $SHA_TAG"
+
+          # 构造任务 payload（结构化 + 自然语言双轨）
+          PAYLOAD=$(cat <<EOF
+          {
+            "intent": "deploy_new_version",
+            "natural_language": "新版本镜像已构建完成，请按标准流程部署到 K8s 集群，部署前确保 ECS 已开机，部署后跑健康检查，失败自动回滚。",
+            "context": {
+              "commit_sha": "${{ github.sha }}",
+              "commit_short": "$SHA_TAG",
+              "commit_message": $(echo "$COMMIT_MSG" | head -1 | jq -Rs .),
+              "branch": "${{ github.ref_name }}",
+              "author": "${{ github.actor }}",
+              "repository": "${{ github.repository }}",
+              "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "images": {
+                "gateway": "$REGISTRY/$NAMESPACE/gateway:$SHA_TAG",
+                "web": "$REGISTRY/$NAMESPACE/web:$SHA_TAG",
+                "client": "$REGISTRY/$NAMESPACE/client:$SHA_TAG"
+              },
+              "k8s_manifests_path": "deployment/kubernetes/"
+            }
+          }
+          EOF
+          )
+
+          # 调用 Agent webhook（HTTP，无需 -k）
+          # --fail 让 HTTP 4xx/5xx 时 curl 退出码非 0，触发 step 失败
+          # --max-time 30 限制最多等 30 秒
+          HTTP_CODE=$(curl -sS -o /tmp/agent_resp.txt -w "%{http_code}" \
+            --max-time 30 \
+            -X POST "$AGENT_URL" \
+            -H "Authorization: Bearer $AGENT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "---- Agent 响应（HTTP $HTTP_CODE）----"
+          cat /tmp/agent_resp.txt
           echo ""
-          echo "未来这里会用 curl 调用 Agent 的 API："
-          echo "  curl -X POST https://your-agent.example.com/tasks ..."
+          echo "--------------------------------"
+
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "❌ Agent 调用失败，HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ 任务已成功投递给 Agent"
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          echo "## 🤖 Agent 通知" >> $GITHUB_STEP_SUMMARY
+          echo "- Webhook: \`${{ secrets.AGENT_WEBHOOK_URL }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 镜像 tag: \`${{ steps.meta.outputs.SHA_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 任务已派发，由 Agent 自主完成部署。" >> $GITHUB_STEP_SUMMARY
