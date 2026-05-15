@@ -191,7 +191,7 @@ jobs:
           2. 从 ACR 拉取上述镜像
           3. 用 deployment/kubernetes/ 下的 YAML 部署到 K8s
           4. 跑健康检查，失败自动回滚
-          5. 完成后告知结果
+          5. 完成后通过微信频道通知部署结果
 
           【Workflow】${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MSG
